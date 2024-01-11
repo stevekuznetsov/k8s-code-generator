@@ -36,6 +36,11 @@ function kube::codegen::internal::git_grep() {
     git grep --untracked "$@"
 }
 
+function kube::codegen::internal::git_grep_no_vendor() {
+    # Same approach that git_grep uses, but exclude vendor/ directories.
+    git grep --untracked "$@" ":(exclude)vendor/"
+}
+
 # Generate tagged helper code: conversions, deepcopy, and defaults
 #
 # Args:
@@ -54,10 +59,14 @@ function kube::codegen::internal::git_grep() {
 #     An optional list (this flag may be specified multiple times) of "extra"
 #     directories to consider during conversion generation.
 #
+#   --ignore-vendor (default: false)
+#     If specified, ignore vendor directories when searching for types.go files.
+#
 function kube::codegen::gen_helpers() {
     local in_pkg_root=""
     local out_base="" # gengo needs the output dir must be $out_base/$out_pkg_root
     local boilerplate="${KUBE_CODEGEN_ROOT}/hack/boilerplate.go.txt"
+    local ignore_vendor="false"
     local v="${KUBE_VERBOSE:-0}"
     local extra_peers=()
 
@@ -79,6 +88,10 @@ function kube::codegen::gen_helpers() {
                 extra_peers+=("$2")
                 shift 2
                 ;;
+            "--ignore-vendor")
+                ignore_vendor="true"
+                shift
+                ;;
             *)
                 echo "unknown argument: $1" >&2
                 return 1
@@ -93,6 +106,11 @@ function kube::codegen::gen_helpers() {
     if [ -z "${out_base}" ]; then
         echo "--output-base is required" >&2
         return 1
+    fi
+    if [ "${ignore_vendor}" == "true" ]; then
+        git_grep_func=kube::codegen::internal::git_grep_no_vendor
+    else
+        git_grep_func=kube::codegen::internal::git_grep
     fi
 
     (
@@ -123,7 +141,7 @@ function kube::codegen::gen_helpers() {
         pkg="$(cd "${dir}" && GO111MODULE=on go list -find .)"
         input_pkgs+=("${pkg}")
     done < <(
-        ( kube::codegen::internal::git_grep -l \
+        ( ${git_grep_func} -l \
             -e '+k8s:deepcopy-gen=' \
             ":(glob)${root}"/'**/*.go' \
             || true \
@@ -157,7 +175,7 @@ function kube::codegen::gen_helpers() {
         pkg="$(cd "${dir}" && GO111MODULE=on go list -find .)"
         input_pkgs+=("${pkg}")
     done < <(
-        ( kube::codegen::internal::git_grep -l \
+        ( ${git_grep_func} -l \
             -e '+k8s:defaulter-gen=' \
             ":(glob)${root}"/'**/*.go' \
             || true \
@@ -191,7 +209,7 @@ function kube::codegen::gen_helpers() {
         pkg="$(cd "${dir}" && GO111MODULE=on go list -find .)"
         input_pkgs+=("${pkg}")
     done < <(
-        ( kube::codegen::internal::git_grep -l \
+        ( ${git_grep_func} -l \
             -e '+k8s:conversion-gen=' \
             ":(glob)${root}"/'**/*.go' \
             || true \
@@ -257,9 +275,13 @@ function kube::codegen::gen_helpers() {
 #   --boilerplate <string = path_to_kube_codegen_boilerplate>
 #     An optional override for the header file to insert into generated files.
 #
+#   --ignore-vendor (default: false)
+#     If specified, ignore vendor directories when searching for types.go files.
+#
 function kube::codegen::gen_openapi() {
     local in_pkg_root=""
     local out_pkg_root=""
+    local ignore_vendor="false"
     local out_base="" # gengo needs the output dir must be $out_base/$out_pkg_root
     local openapi_subdir="openapi"
     local extra_pkgs=()
@@ -302,6 +324,10 @@ function kube::codegen::gen_openapi() {
                 boilerplate="$2"
                 shift 2
                 ;;
+            "--ignore-vendor")
+                ignore_vendor="true"
+                shift
+                ;;
             *)
                 echo "unknown argument: $1" >&2
                 return 1
@@ -320,6 +346,12 @@ function kube::codegen::gen_openapi() {
     if [ -z "${out_base}" ]; then
         echo "--output-base is required" >&2
         return 1
+    fi
+
+    if [ "${ignore_vendor}" == "true" ]; then
+        git_grep_func=kube::codegen::internal::git_grep_no_vendor
+    else
+        git_grep_func=kube::codegen::internal::git_grep
     fi
 
     local new_report
@@ -352,7 +384,7 @@ function kube::codegen::gen_openapi() {
         pkg="$(cd "${dir}" && GO111MODULE=on go list -find .)"
         input_pkgs+=("${pkg}")
     done < <(
-        ( kube::codegen::internal::git_grep -l \
+        ( ${git_grep_func} -l \
             -e '+k8s:openapi-gen=' \
             ":(glob)${root}"/'**/*.go' \
             || true \
@@ -433,10 +465,14 @@ function kube::codegen::gen_openapi() {
 #   --informers-name <string = "informers">
 #     An optional override for the leaf name of the generated "informers" directory.
 #
+#   --ignore-vendor (default: false)
+#     If specified, ignore vendor directories when searching for types.go files.
+#
 function kube::codegen::gen_client() {
     local in_pkg_root=""
     local out_pkg_root=""
     local out_base="" # gengo needs the output dir must be $out_base/$out_pkg_root
+    local ignore_vendor="false"
     local clientset_subdir="clientset"
     local clientset_versioned_name="versioned"
     local applyconfig="false"
@@ -485,6 +521,10 @@ function kube::codegen::gen_client() {
                 watchable="true"
                 shift
                 ;;
+            "--ignore-vendor")
+                ignore_vendor="true"
+                shift
+                ;;
             "--listers-name")
                 listers_subdir="$2"
                 shift 2
@@ -511,6 +551,11 @@ function kube::codegen::gen_client() {
     if [ -z "${out_base}" ]; then
         echo "--output-base is required" >&2
         return 1
+    fi
+    if [ "${ignore_vendor}" == "true" ]; then
+        git_grep_func=kube::codegen::internal::git_grep_no_vendor
+    else
+        git_grep_func=kube::codegen::internal::git_grep
     fi
 
     (
@@ -543,6 +588,7 @@ function kube::codegen::gen_client() {
         pkg="$(cd "${dir}" && GO111MODULE=on go list -find .)"
         leaf="$(basename "${dir}")"
         if grep -E -q '^v[0-9]+((alpha|beta)[0-9]+)?$' <<< "${leaf}"; then
+            echo "BULTO: ${pkg}"
             input_pkgs+=("${pkg}")
 
             dir2="$(dirname "${dir}")"
@@ -550,12 +596,13 @@ function kube::codegen::gen_client() {
             group_versions+=("${leaf2}/${leaf}")
         fi
     done < <(
-        ( kube::codegen::internal::git_grep -l \
+        ( ${git_grep_func} -l \
             -e '+genclient' \
             ":(glob)${in_root}"/'**/*.go' \
             || true \
         ) | LC_ALL=C sort -u
     )
+
 
     # remove duplicates for any entries
     IFS=" " read -r -a group_versions <<< "$(tr ' ' '\n' <<< "${group_versions[@]}" | sort -u | tr '\n' ' ')"
@@ -571,7 +618,7 @@ function kube::codegen::gen_client() {
 
         echo "Generating applyconfig code for ${#input_pkgs[@]} targets"
 
-        ( kube::codegen::internal::git_grep -l --null \
+        ( ${git_grep_func} -l --null \
             -e '^// Code generated by applyconfiguration-gen. DO NOT EDIT.$' \
             ":(glob)${out_root}/${applyconfig_subdir}"/'**/*.go' \
             || true \
@@ -592,7 +639,7 @@ function kube::codegen::gen_client() {
 
     echo "Generating client code for ${#group_versions[@]} targets"
 
-    ( kube::codegen::internal::git_grep -l --null \
+    ( ${git_grep_func} -l --null \
         -e '^// Code generated by client-gen. DO NOT EDIT.$' \
         ":(glob)${out_root}/${clientset_subdir}"/'**/*.go' \
         || true \
@@ -615,7 +662,7 @@ function kube::codegen::gen_client() {
     if [ "${watchable}" == "true" ]; then
         echo "Generating lister code for ${#input_pkgs[@]} targets"
 
-        ( kube::codegen::internal::git_grep -l --null \
+        ( ${git_grep_func} -l --null \
             -e '^// Code generated by lister-gen. DO NOT EDIT.$' \
             ":(glob)${out_root}/${listers_subdir}"/'**/*.go' \
             || true \
@@ -634,7 +681,7 @@ function kube::codegen::gen_client() {
 
         echo "Generating informer code for ${#input_pkgs[@]} targets"
 
-        ( kube::codegen::internal::git_grep -l --null \
+        ( ${git_grep_func} -l --null \
             -e '^// Code generated by informer-gen. DO NOT EDIT.$' \
             ":(glob)${out_root}/${informers_subdir}"/'**/*.go' \
             || true \
